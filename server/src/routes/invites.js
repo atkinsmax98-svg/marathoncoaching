@@ -36,7 +36,8 @@ router.post('/', authenticate, requireCoach, async (req, res) => {
       [id, req.user.id, email, token, expiresAt]
     );
 
-    const inviteUrl = `http://localhost:5173/register?invite=${token}`;
+    const baseUrl = process.env.APP_URL || 'http://localhost:5173';
+    const inviteUrl = `${baseUrl}/register?invite=${token}`;
 
     res.status(201).json({
       id,
