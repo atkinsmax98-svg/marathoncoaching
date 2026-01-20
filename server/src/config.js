@@ -4,3 +4,4 @@ dotenv.config();
 export const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 export const PORT = process.env.PORT || 3001;
 export const NODE_ENV = process.env.NODE_ENV || 'development';
+export const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || 'dev-encryption-key-32-chars-long!';

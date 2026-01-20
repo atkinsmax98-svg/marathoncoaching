@@ -2,61 +2,60 @@ import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { query } from '../db/config.js';
 import { authenticate } from '../middleware/auth.js';
-import { generateMockWeeklyStats } from '../services/garminMock.js';
+import * as garminService from '../services/garminService.js';
 
 const router = Router();
 
 // Get Garmin connection status
 router.get('/status', authenticate, async (req, res) => {
   try {
-    const result = query(
-      'SELECT id, garmin_user_id, connected_at FROM garmin_connections WHERE user_id = ?',
-      [req.user.id]
-    );
+    const status = garminService.getConnectionStatus(req.user.id);
 
-    if (result.rows.length === 0) {
+    if (!status.connected) {
       return res.json({ connected: false });
     }
 
     res.json({
       connected: true,
-      garmin_user_id: result.rows[0].garmin_user_id,
-      connected_at: result.rows[0].connected_at
+      garmin_user_id: status.garminUserId,
+      connected_at: status.connectedAt,
+      last_sync_at: status.lastSyncAt
     });
   } catch (error) {
+    console.error('Garmin status error:', error);
     res.status(500).json({ error: 'Failed to get Garmin status' });
   }
 });
 
-// Connect Garmin (mock - simulates OAuth flow)
+// Connect Garmin with username/password
 router.post('/connect', authenticate, async (req, res) => {
   try {
-    // Check if already connected
-    const existing = query(
-      'SELECT id FROM garmin_connections WHERE user_id = ?',
-      [req.user.id]
-    );
+    const { username, password } = req.body;
 
-    if (existing.rows.length > 0) {
-      return res.status(400).json({ error: 'Garmin already connected' });
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
     }
 
-    // Mock: Create fake connection
-    const id = uuidv4();
-    const mockGarminUserId = `garmin_${Date.now()}`;
-    const tokenExpires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    // Check if already connected
+    const status = garminService.getConnectionStatus(req.user.id);
+    if (status.connected) {
+      // Disconnect first then reconnect with new credentials
+      garminService.disconnect(req.user.id);
+    }
 
-    query(
-      `INSERT INTO garmin_connections (id, user_id, access_token, refresh_token, garmin_user_id, token_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [id, req.user.id, 'mock_access_token', 'mock_refresh_token', mockGarminUserId, tokenExpires]
-    );
+    // Attempt to connect
+    const result = await garminService.connect(req.user.id, username, password);
 
-    // Generate initial mock weekly stats
-    const mockStats = generateMockWeeklyStats(4);
-    for (const stat of mockStats) {
+    if (!result.success) {
+      return res.status(401).json({ error: result.error });
+    }
+
+    // Fetch initial stats
+    const { stats } = await garminService.fetchAndCalculateStats(req.user.id, 8);
+
+    // Store weekly stats
+    for (const stat of stats) {
       const statId = uuidv4();
-      // Use INSERT OR REPLACE for SQLite upsert
       query(
         `INSERT OR REPLACE INTO weekly_stats (id, athlete_id, week_start, total_distance_km, total_runs, avg_pace_min_km, total_time_minutes)
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -66,8 +65,9 @@ router.post('/connect', authenticate, async (req, res) => {
 
     res.json({
       connected: true,
-      garmin_user_id: mockGarminUserId,
-      message: 'Garmin connected successfully (mock)'
+      garmin_user_id: result.garminUserId,
+      message: 'Garmin connected successfully',
+      stats_count: stats.length
     });
   } catch (error) {
     console.error('Garmin connect error:', error);
@@ -78,9 +78,10 @@ router.post('/connect', authenticate, async (req, res) => {
 // Disconnect Garmin
 router.post('/disconnect', authenticate, async (req, res) => {
   try {
-    query('DELETE FROM garmin_connections WHERE user_id = ?', [req.user.id]);
+    garminService.disconnect(req.user.id);
     res.json({ message: 'Garmin disconnected' });
   } catch (error) {
+    console.error('Garmin disconnect error:', error);
     res.status(500).json({ error: 'Failed to disconnect Garmin' });
   }
 });
@@ -105,53 +106,76 @@ router.get('/stats/weekly', authenticate, async (req, res) => {
 
     res.json(result.rows);
   } catch (error) {
+    console.error('Weekly stats error:', error);
     res.status(500).json({ error: 'Failed to get weekly stats' });
   }
 });
 
-// Sync runs to Garmin (mock)
+// Get activities list
+router.get('/activities', authenticate, async (req, res) => {
+  try {
+    const { startDate, endDate, limit = 50 } = req.query;
+
+    const start = startDate ? new Date(startDate) : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const end = endDate ? new Date(endDate) : new Date();
+
+    const { activities, error } = await garminService.fetchActivities(req.user.id, start, end);
+
+    if (error) {
+      return res.status(400).json({ error });
+    }
+
+    res.json({
+      activities: activities.slice(0, parseInt(limit)),
+      count: activities.length
+    });
+  } catch (error) {
+    console.error('Activities fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch activities' });
+  }
+});
+
+// Sync runs to Garmin (placeholder - limited support in garmin-connect)
 router.post('/sync', authenticate, async (req, res) => {
   try {
     const { run_ids } = req.body;
 
     // Check if Garmin is connected
-    const connection = query(
-      'SELECT id FROM garmin_connections WHERE user_id = ?',
-      [req.user.id]
-    );
-
-    if (connection.rows.length === 0) {
+    const status = garminService.getConnectionStatus(req.user.id);
+    if (!status.connected) {
       return res.status(400).json({ error: 'Garmin not connected' });
     }
 
-    // Mock: Just return success
+    // Note: Pushing workouts to Garmin has limited support in the unofficial library
     res.json({
       synced: run_ids?.length || 0,
-      message: 'Runs synced to Garmin calendar (mock)'
+      message: 'Workout sync has limited support with unofficial Garmin API'
     });
   } catch (error) {
+    console.error('Garmin sync error:', error);
     res.status(500).json({ error: 'Failed to sync to Garmin' });
   }
 });
 
-// Refresh stats from Garmin (mock - generates new random data)
+// Refresh stats from Garmin
 router.post('/refresh', authenticate, async (req, res) => {
   try {
-    const connection = query(
-      'SELECT id FROM garmin_connections WHERE user_id = ?',
-      [req.user.id]
-    );
-
-    if (connection.rows.length === 0) {
+    const status = garminService.getConnectionStatus(req.user.id);
+    if (!status.connected) {
       return res.status(400).json({ error: 'Garmin not connected' });
     }
 
-    // Delete old stats
+    // Fetch fresh activities and calculate stats
+    const { stats, error } = await garminService.fetchAndCalculateStats(req.user.id, 8);
+
+    if (error) {
+      return res.status(400).json({ error });
+    }
+
+    // Delete old stats and insert new ones
     query('DELETE FROM weekly_stats WHERE athlete_id = ?', [req.user.id]);
 
-    // Generate fresh mock stats
-    const mockStats = generateMockWeeklyStats(4);
-    for (const stat of mockStats) {
+    for (const stat of stats) {
       const statId = uuidv4();
       query(
         `INSERT INTO weekly_stats (id, athlete_id, week_start, total_distance_km, total_runs, avg_pace_min_km, total_time_minutes)
@@ -160,8 +184,12 @@ router.post('/refresh', authenticate, async (req, res) => {
       );
     }
 
-    res.json({ message: 'Stats refreshed from Garmin (mock)' });
+    res.json({
+      message: 'Stats refreshed from Garmin',
+      stats_count: stats.length
+    });
   } catch (error) {
+    console.error('Garmin refresh error:', error);
     res.status(500).json({ error: 'Failed to refresh stats' });
   }
 });

@@ -55,7 +55,32 @@ const runInit = async () => {
         refresh_token TEXT,
         token_expires_at DATETIME,
         garmin_user_id TEXT,
+        encrypted_username TEXT,
+        encrypted_password TEXT,
+        oauth1_token TEXT,
+        oauth2_token TEXT,
+        last_sync_at DATETIME,
         connected_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Garmin activities cache table
+    db.run(`
+      CREATE TABLE IF NOT EXISTS garmin_activities (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        garmin_activity_id TEXT UNIQUE NOT NULL,
+        activity_name TEXT,
+        activity_type TEXT,
+        start_time DATETIME,
+        distance_meters REAL,
+        duration_seconds INTEGER,
+        average_hr INTEGER,
+        max_hr INTEGER,
+        calories INTEGER,
+        avg_speed REAL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id)
       )
     `);
 
@@ -77,6 +102,24 @@ const runInit = async () => {
     db.run(`CREATE INDEX IF NOT EXISTS idx_runs_athlete_date ON runs(athlete_id, date)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_weekly_stats_athlete ON weekly_stats(athlete_id, week_start)`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_users_coach ON users(coach_id)`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_garmin_activities_user ON garmin_activities(user_id, start_time)`);
+
+    // Migrations: Add new columns to existing tables (safe to run multiple times)
+    const migrations = [
+      `ALTER TABLE garmin_connections ADD COLUMN encrypted_username TEXT`,
+      `ALTER TABLE garmin_connections ADD COLUMN encrypted_password TEXT`,
+      `ALTER TABLE garmin_connections ADD COLUMN oauth1_token TEXT`,
+      `ALTER TABLE garmin_connections ADD COLUMN oauth2_token TEXT`,
+      `ALTER TABLE garmin_connections ADD COLUMN last_sync_at DATETIME`
+    ];
+
+    for (const migration of migrations) {
+      try {
+        db.run(migration);
+      } catch (e) {
+        // Column already exists, ignore
+      }
+    }
 
     saveDb();
     console.log('Database initialized successfully!');

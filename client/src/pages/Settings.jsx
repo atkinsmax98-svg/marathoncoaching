@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import api from '../services/api'
+import GarminLoginModal from '../components/Settings/GarminLoginModal'
 
 export default function Settings() {
   const { user } = useAuth()
   const [garminStatus, setGarminStatus] = useState(null)
   const [loading, setLoading] = useState(true)
-  const [connecting, setConnecting] = useState(false)
   const [syncing, setSyncing] = useState(false)
+  const [showLoginModal, setShowLoginModal] = useState(false)
 
   useEffect(() => {
     loadGarminStatus()
@@ -24,17 +25,10 @@ export default function Settings() {
     }
   }
 
-  const handleConnectGarmin = async () => {
-    setConnecting(true)
-    try {
-      await api.post('/garmin/connect')
-      await loadGarminStatus()
-    } catch (err) {
-      console.error('Failed to connect Garmin:', err)
-      alert(err.response?.data?.error || 'Failed to connect Garmin')
-    } finally {
-      setConnecting(false)
-    }
+  const handleConnectGarmin = async (username, password) => {
+    const res = await api.post('/garmin/connect', { username, password })
+    await loadGarminStatus()
+    return res.data
   }
 
   const handleDisconnectGarmin = async () => {
@@ -50,8 +44,8 @@ export default function Settings() {
   const handleRefreshStats = async () => {
     setSyncing(true)
     try {
-      await api.post('/garmin/refresh')
-      alert('Stats refreshed from Garmin!')
+      const res = await api.post('/garmin/refresh')
+      alert(`Stats refreshed from Garmin! (${res.data.stats_count} weeks of data)`)
     } catch (err) {
       console.error('Failed to refresh stats:', err)
       alert(err.response?.data?.error || 'Failed to refresh stats')
@@ -99,10 +93,15 @@ export default function Settings() {
           <h4 style={{ marginBottom: '4px' }}>Garmin Connect</h4>
           <p style={{ fontSize: '13px', opacity: 0.9 }}>
             {garminStatus?.connected
-              ? `Connected since ${new Date(garminStatus.connected_at).toLocaleDateString()}`
+              ? `Connected as ${garminStatus.garmin_user_id} since ${new Date(garminStatus.connected_at).toLocaleDateString()}`
               : 'Connect to sync your running stats'
             }
           </p>
+          {garminStatus?.last_sync_at && (
+            <p style={{ fontSize: '12px', opacity: 0.7, marginTop: '4px' }}>
+              Last synced: {new Date(garminStatus.last_sync_at).toLocaleString()}
+            </p>
+          )}
         </div>
         {garminStatus?.connected ? (
           <button
@@ -116,10 +115,9 @@ export default function Settings() {
           <button
             className="btn"
             style={{ background: 'white', color: '#1a365d' }}
-            onClick={handleConnectGarmin}
-            disabled={connecting}
+            onClick={() => setShowLoginModal(true)}
           >
-            {connecting ? 'Connecting...' : 'Connect'}
+            Connect
           </button>
         )}
       </div>
@@ -156,7 +154,7 @@ export default function Settings() {
                 </div>
                 <button
                   className="btn btn-secondary"
-                  onClick={() => api.post('/garmin/sync').then(() => alert('Calendar synced to Garmin!'))}
+                  onClick={() => api.post('/garmin/sync').then((res) => alert(res.data.message))}
                 >
                   Sync
                 </button>
@@ -175,8 +173,15 @@ export default function Settings() {
         fontSize: '13px',
         color: '#2c5282'
       }}>
-        <strong>Note:</strong> This is a demo app using mock Garmin data. In production, you would connect to the real Garmin Connect API using OAuth authentication.
+        <strong>Note:</strong> This app uses the unofficial Garmin Connect library. MFA-enabled accounts are not supported. Your credentials are encrypted at rest.
       </div>
+
+      {/* Login Modal */}
+      <GarminLoginModal
+        isOpen={showLoginModal}
+        onClose={() => setShowLoginModal(false)}
+        onConnect={handleConnectGarmin}
+      />
     </div>
   )
 }
